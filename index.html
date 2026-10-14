@@ -7,19 +7,18 @@
     <style>
         body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; touch-action: none; }
         #top { text-align: center; padding: 15px; }
-        button { padding: 12px 24px; font-size: 18px; font-weight: bold; background: #00e676; border: none; border-radius: 8px; cursor: pointer; }
+        button { padding: 10px 18px; font-size: 16px; font-weight: bold; background: #00e676; border: none; border-radius: 8px; margin: 0 5px; }
         #controls { display: flex; flex: 1; align-items: center; justify-content: space-around; padding: 20px; }
         .slider-box { display: flex; flex-direction: column; align-items: center; }
-        /* 엑셀은 세로 슬라이더 */
-        #throttle { -webkit-appearance: slider-vertical; width: 60px; height: 220px; }
-        /* 조향은 가로 슬라이더 */
-        #steer { width: 220px; height: 60px; }
+        #throttle { -webkit-appearance: slider-vertical; width: 60px; height: 200px; }
+        #steer { width: 200px; height: 60px; }
     </style>
 </head>
 <body>
     <div id="top">
-        <button id="connectBtn">허브 블루투스 연결</button>
-        <span id="status" style="margin-left:15px;">연결 대기 중</span>
+        <button id="connectBtn">1. 블루투스 연결</button>
+        <button id="startBtn" style="background:#29b6f6;">2. 차 시동 켜기</button>
+        <div id="status" style="margin-top:8px; font-size:14px;">대기 중</div>
     </div>
     <div id="controls">
         <div class="slider-box">
@@ -50,9 +49,20 @@
                 const server = await device.gatt.connect();
                 const service = await server.getPrimaryService(SERVICE_UUID);
                 characteristic = await service.getCharacteristic(CHAR_UUID);
-                statusText.innerText = "연결 완료!";
+                statusText.innerText = "연결됨! '2. 차 시동 켜기' 또는 허브 버튼을 누르세요.";
             } catch (err) {
-                alert("연결 실패: " + err);
+                statusText.innerText = "연결 실패: " + err;
+            }
+        });
+
+        // 폰에서 허브 프로그램 원격 실행 (0x01 커맨드)
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            if (!characteristic) return;
+            try {
+                await characteristic.writeValueWithResponse(new Uint8Array([0x01]));
+                statusText.innerText = "시동 명령 전송 완료!";
+            } catch (e) {
+                statusText.innerText = "허브 가운데 버튼을 직접 눌러주세요.";
             }
         });
 
@@ -60,24 +70,21 @@
             if (!characteristic || isSending) return;
             isSending = true;
             try {
-                // 음수를 없애기 위해 +100 오프셋 (0 ~ 200 범위로 변환)
-                const p = parseInt(throttle.value) + 100;
-                const s = parseInt(steer.value) + 100;
-                // 0x06은 Pybricks의 Write Stdin 커맨드 헤더
+                // +110 오프셋으로 10 ~ 210 범위 전송 (0x03 Ctrl+C 방지)
+                const p = parseInt(throttle.value) + 110;
+                const s = parseInt(steer.value) + 110;
                 const data = new Uint8Array([0x06, p, s]);
-                await characteristic.writeValueWithoutResponse(data);
+                await characteristic.writeValueWithResponse(data);
             } catch (e) {}
             isSending = false;
         }
 
-        // 손 떼면 자동으로 중립(0) 복귀
         ['touchend', 'mouseup'].forEach(evt => {
             throttle.addEventListener(evt, () => { throttle.value = 0; sendCommand(); });
             steer.addEventListener(evt, () => { steer.value = 0; sendCommand(); });
         });
 
-        // 50ms마다 주기적으로 상태 전송
-        setInterval(sendCommand, 50);
+        setInterval(sendCommand, 80);
     </script>
 </body>
 </html>
