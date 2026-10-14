@@ -6,18 +6,20 @@
     <title>SPIKE RC Controller</title>
     <style>
         body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; touch-action: none; }
-        #top { text-align: center; padding: 15px; background: #2a2a2a; }
-        button { padding: 12px 20px; font-size: 16px; font-weight: bold; background: #00e676; border: none; border-radius: 8px; cursor: pointer; }
-        #controls { display: flex; flex: 1; align-items: center; justify-content: space-around; padding: 20px; }
+        #top { text-align: center; padding: 10px; background: #2a2a2a; }
+        button { padding: 10px 16px; font-size: 15px; font-weight: bold; background: #00e676; border: none; border-radius: 8px; margin: 4px; }
+        #controls { display: flex; flex: 1; align-items: center; justify-content: space-around; padding: 10px; }
         .slider-box { display: flex; flex-direction: column; align-items: center; }
-        #throttle { -webkit-appearance: slider-vertical; width: 60px; height: 200px; }
-        #steer { width: 200px; height: 60px; }
+        #throttle { -webkit-appearance: slider-vertical; width: 60px; height: 180px; }
+        #steer { width: 180px; height: 60px; }
     </style>
 </head>
 <body>
     <div id="top">
-        <button id="connectBtn">허브 블루투스 연결</button>
-        <div id="status" style="margin-top:10px; font-size:14px; color:#ffd54f;">대기 중 (허브 초록불 켜진 상태에서 연결하세요)</div>
+        <button id="connectBtn">1. 허브 연결</button>
+        <button id="testW" style="background:#ffb300;">전진(W) 테스트</button>
+        <button id="testStop" style="background:#ff5252;">정지 테스트</button>
+        <div id="status" style="margin-top:6px; font-size:13px; color:#ffd54f;">허브 초록불 켜진 상태에서 연결하세요</div>
     </div>
     <div id="controls">
         <div class="slider-box">
@@ -35,6 +37,7 @@
         const PYBRICKS_CHAR = 'c5f50002-8280-46da-89f4-6d8051e4aeef';
         const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
         const NUS_RX_CHAR = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+        const NUS_TX_CHAR = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 
         let rxChar = null;
         let useNus = false;
@@ -53,57 +56,67 @@
                 });
                 const server = await device.gatt.connect();
 
+                // 핵심 패치: Pybricks 데이터 수신 락을 풀기 위해 알림 구독(startNotifications) 강제 활성화!
+                const pbService = await server.getPrimaryService(PYBRICKS_SERVICE);
+                const pbChar = await pbService.getCharacteristic(PYBRICKS_CHAR);
+                await pbChar.startNotifications();
+
                 try {
                     const nusService = await server.getPrimaryService(NUS_SERVICE);
+                    const txChar = await nusService.getCharacteristic(NUS_TX_CHAR);
+                    await txChar.startNotifications();
                     rxChar = await nusService.getCharacteristic(NUS_RX_CHAR);
                     useNus = true;
                 } catch (e) {
-                    const pbService = await server.getPrimaryService(PYBRICKS_SERVICE);
-                    rxChar = await pbService.getCharacteristic(PYBRICKS_CHAR);
+                    rxChar = pbChar;
                     useNus = false;
                 }
 
-                statusText.innerText = "연결 완료! 슬라이더를 움직여보세요.";
+                statusText.innerText = "연결 및 잠금해제 완료! 노란색 '전진(W) 테스트' 버튼을 눌러보세요.";
             } catch (err) {
                 statusText.innerText = "연결 실패: " + err;
             }
         });
 
-        async function sendCommand() {
+        async function writeRaw(str) {
+            if (!rxChar) return;
+            const bytes = encoder.encode(str);
+            let payload = bytes;
+            if (!useNus) {
+                payload = new Uint8Array(bytes.length + 1);
+                payload[0] = 0x06;
+                payload.set(bytes, 1);
+            }
+            if (rxChar.properties.writeWithoutResponse) {
+                await rxChar.writeValueWithoutResponse(payload);
+            } else {
+                await rxChar.writeValueWithResponse(payload);
+            }
+        }
+
+        // 1글자 즉시 테스트용 버튼
+        document.getElementById('testW').addEventListener('click', () => writeRaw('w'));
+        document.getElementById('testStop').addEventListener('click', () => writeRaw(' '));
+
+        async function sendSlider() {
             if (!rxChar || isSending) return;
             isSending = true;
             try {
-                // 텍스트 문자열("속도,조향\n")로 인코딩해서 전송
-                const textBytes = encoder.encode(`${throttle.value},${steer.value}\n`);
-                let payload = textBytes;
-
-                if (!useNus) {
-                    payload = new Uint8Array(textBytes.length + 1);
-                    payload[0] = 0x06; // Pybricks stdin 헤더
-                    payload.set(textBytes, 1);
-                }
-
-                if (rxChar.properties.writeWithoutResponse) {
-                    await rxChar.writeValueWithoutResponse(payload);
-                } else {
-                    await rxChar.writeValueWithResponse(payload);
-                }
-                statusText.innerText = `전송중 -> 속도: ${throttle.value} / 조향: ${steer.value}`;
+                await writeRaw(`${throttle.value},${steer.value}\n`);
+                statusText.innerText = `전송중: ${throttle.value}, ${steer.value}`;
             } catch (e) {}
             isSending = false;
         }
 
         ['input', 'change'].forEach(evt => {
-            throttle.addEventListener(evt, sendCommand);
-            steer.addEventListener(evt, sendCommand);
+            throttle.addEventListener(evt, sendSlider);
+            steer.addEventListener(evt, sendSlider);
         });
 
         ['touchend', 'mouseup'].forEach(evt => {
-            throttle.addEventListener(evt, () => { throttle.value = 0; sendCommand(); });
-            steer.addEventListener(evt, () => { steer.value = 0; sendCommand(); });
+            throttle.addEventListener(evt, () => { throttle.value = 0; sendSlider(); });
+            steer.addEventListener(evt, () => { steer.value = 0; sendSlider(); });
         });
-
-        setInterval(sendCommand, 100);
     </script>
 </body>
 </html>
