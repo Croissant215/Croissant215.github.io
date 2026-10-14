@@ -17,7 +17,7 @@
 <body>
     <div id="top">
         <button id="connectBtn">허브 블루투스 연결</button>
-        <div id="status" style="margin-top:10px; font-size:14px; color:#ffd54f;">연결 대기 중...</div>
+        <div id="status" style="margin-top:10px; font-size:14px; color:#ffd54f;">대기 중 (허브 초록불 켜진 상태에서 연결하세요)</div>
     </div>
     <div id="controls">
         <div class="slider-box">
@@ -39,6 +39,7 @@
         let rxChar = null;
         let useNus = false;
         let isSending = false;
+        const encoder = new TextEncoder();
 
         const throttle = document.getElementById('throttle');
         const steer = document.getElementById('steer');
@@ -52,19 +53,17 @@
                 });
                 const server = await device.gatt.connect();
 
-                // 1순위: 최신 펌웨어용 NUS 채널 탐색
                 try {
                     const nusService = await server.getPrimaryService(NUS_SERVICE);
                     rxChar = await nusService.getCharacteristic(NUS_RX_CHAR);
                     useNus = true;
                 } catch (e) {
-                    // 2순위: 구형 펌웨어용 Pybricks 채널 폴백
                     const pbService = await server.getPrimaryService(PYBRICKS_SERVICE);
                     rxChar = await pbService.getCharacteristic(PYBRICKS_CHAR);
                     useNus = false;
                 }
 
-                statusText.innerText = "연결 성공! (모드: " + (useNus ? "NUS" : "PB") + ") - 허브에 초록불이 켜져있는지 확인하세요!";
+                statusText.innerText = "연결 완료! 슬라이더를 움직여보세요.";
             } catch (err) {
                 statusText.innerText = "연결 실패: " + err;
             }
@@ -74,10 +73,15 @@
             if (!rxChar || isSending) return;
             isSending = true;
             try {
-                const p = parseInt(throttle.value) + 110;
-                const s = parseInt(steer.value) + 110;
-                // 255는 패킷 시작 알림 바이트
-                const payload = useNus ? new Uint8Array([255, p, s]) : new Uint8Array([0x06, 255, p, s]);
+                // 텍스트 문자열("속도,조향\n")로 인코딩해서 전송
+                const textBytes = encoder.encode(`${throttle.value},${steer.value}\n`);
+                let payload = textBytes;
+
+                if (!useNus) {
+                    payload = new Uint8Array(textBytes.length + 1);
+                    payload[0] = 0x06; // Pybricks stdin 헤더
+                    payload.set(textBytes, 1);
+                }
 
                 if (rxChar.properties.writeWithoutResponse) {
                     await rxChar.writeValueWithoutResponse(payload);
@@ -85,9 +89,7 @@
                     await rxChar.writeValueWithResponse(payload);
                 }
                 statusText.innerText = `전송중 -> 속도: ${throttle.value} / 조향: ${steer.value}`;
-            } catch (e) {
-                statusText.innerText = "전송 에러: " + e.message;
-            }
+            } catch (e) {}
             isSending = false;
         }
 
