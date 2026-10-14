@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>SPIKE RC Controller</title>
+    <style>
+        body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; touch-action: none; }
+        #top { text-align: center; padding: 15px; }
+        button { padding: 12px 24px; font-size: 18px; font-weight: bold; background: #00e676; border: none; border-radius: 8px; cursor: pointer; }
+        #controls { display: flex; flex: 1; align-items: center; justify-content: space-around; padding: 20px; }
+        .slider-box { display: flex; flex-direction: column; align-items: center; }
+        /* 엑셀은 세로 슬라이더 */
+        #throttle { -webkit-appearance: slider-vertical; width: 60px; height: 220px; }
+        /* 조향은 가로 슬라이더 */
+        #steer { width: 220px; height: 60px; }
+    </style>
+</head>
+<body>
+    <div id="top">
+        <button id="connectBtn">허브 블루투스 연결</button>
+        <span id="status" style="margin-left:15px;">연결 대기 중</span>
+    </div>
+    <div id="controls">
+        <div class="slider-box">
+            <p>엑셀 / 후진</p>
+            <input type="range" id="throttle" min="-100" max="100" value="0">
+        </div>
+        <div class="slider-box">
+            <p>좌 / 우 조향</p>
+            <input type="range" id="steer" min="-100" max="100" value="0">
+        </div>
+    </div>
+
+    <script>
+        const SERVICE_UUID = 'c5f50001-8280-46da-89f4-6d8051e4aeef';
+        const CHAR_UUID = 'c5f50002-8280-46da-89f4-6d8051e4aeef';
+        let characteristic = null;
+        let isSending = false;
+
+        const throttle = document.getElementById('throttle');
+        const steer = document.getElementById('steer');
+        const statusText = document.getElementById('status');
+
+        document.getElementById('connectBtn').addEventListener('click', async () => {
+            try {
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ services: [SERVICE_UUID] }]
+                });
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                characteristic = await service.getCharacteristic(CHAR_UUID);
+                statusText.innerText = "연결 완료!";
+            } catch (err) {
+                alert("연결 실패: " + err);
+            }
+        });
+
+        async function sendCommand() {
+            if (!characteristic || isSending) return;
+            isSending = true;
+            try {
+                // 음수를 없애기 위해 +100 오프셋 (0 ~ 200 범위로 변환)
+                const p = parseInt(throttle.value) + 100;
+                const s = parseInt(steer.value) + 100;
+                // 0x06은 Pybricks의 Write Stdin 커맨드 헤더
+                const data = new Uint8Array([0x06, p, s]);
+                await characteristic.writeValueWithoutResponse(data);
+            } catch (e) {}
+            isSending = false;
+        }
+
+        // 손 떼면 자동으로 중립(0) 복귀
+        ['touchend', 'mouseup'].forEach(evt => {
+            throttle.addEventListener(evt, () => { throttle.value = 0; sendCommand(); });
+            steer.addEventListener(evt, () => { steer.value = 0; sendCommand(); });
+        });
+
+        // 50ms마다 주기적으로 상태 전송
+        setInterval(sendCommand, 50);
+    </script>
+</body>
+</html>
